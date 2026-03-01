@@ -1,11 +1,13 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { getSessionId } from "@/lib/session";
 
 // localStorage keys
 const LS_PREFS = "pd_preferences";
 const LS_HISTORY = "pd_history";
+const HISTORY_CAP = 50;
 
 function lsRead(key, fallback) {
   try {
@@ -23,15 +25,13 @@ function lsWrite(key, value) {
 }
 
 // Supabase is an optional background sync layer.
-// If it's unreachable, restricted, or tables don't exist, we silently ignore it.
+// If it's unreachable, tables don't exist, or env vars are missing, we silently ignore it.
 // localStorage is always the source of truth.
 function getSupabaseClient() {
   try {
-    // Only init if env vars are present — avoids crashing during SSR/build
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return null;
-    const { createClient } = require("@supabase/supabase-js");
     return createClient(url, key);
   } catch {
     return null;
@@ -108,7 +108,10 @@ export function AppProvider({ children }) {
     };
 
     setHistory((prev) => {
-      const next = [entry, ...prev];
+      // Remove any existing entry for this product so revisits bubble to the top
+      // instead of creating duplicate rows. Cap total at HISTORY_CAP.
+      const deduped = prev.filter((e) => e.product_id !== product.id);
+      const next = [entry, ...deduped].slice(0, HISTORY_CAP);
       lsWrite(LS_HISTORY, next);
 
       // Background sync to Supabase
@@ -124,6 +127,11 @@ export function AppProvider({ children }) {
     });
   }, []);
 
+  const clearHistory = useCallback(() => {
+    setHistory([]);
+    lsWrite(LS_HISTORY, []);
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
@@ -133,6 +141,7 @@ export function AppProvider({ children }) {
         setPreference,
         history,
         recordVisit,
+        clearHistory,
       }}
     >
       {children}
