@@ -4,7 +4,9 @@ A product discovery web app built for the Beespoke R1 Build Challenge (Track B).
 
 ## Live Demo
 
-_[Add deployed link here]_
+https://product-discovery-rho.vercel.app
+
+GitHub: https://github.com/NJP6969/product-discovery
 
 ## Approach
 
