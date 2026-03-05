@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { fetchProducts, fetchCategories } from "@/lib/api";
+import { getTopCategories } from "@/lib/topCategories";
 import { useApp } from "@/context/AppContext";
 import ProductCard from "@/components/ProductCard";
 import SkeletonCard from "@/components/SkeletonCard";
@@ -59,26 +60,36 @@ export default function HomePage() {
     });
   }, [products, preferences, prefsLoaded]);
 
-  // Filter by search + category
-  const filtered = useMemo(() => {
-    let result = sortedProducts;
+  // 1. Apply search only (before top-category narrowing)
+  const searchFiltered = useMemo(() => {
+    if (!search.trim()) return sortedProducts;
+    const q = search.toLowerCase();
+    return sortedProducts.filter(
+      (p) =>
+        p.title.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q)
+    );
+  }, [sortedProducts, search]);
 
+  // 2. Compute top 2 categories from the search results
+  const topCategories = useMemo(() => getTopCategories(searchFiltered), [searchFiltered]);
+
+  // 3. Keep activeCategory in sync — reset if it falls outside the top 2
+  useEffect(() => {
+    if (activeCategory && !topCategories.includes(activeCategory)) {
+      setActiveCategory(null);
+    }
+  }, [topCategories, activeCategory]);
+
+  // 4. Final list: restrict to top 2 categories, then apply active category filter
+  const filtered = useMemo(() => {
+    let result = searchFiltered.filter((p) => topCategories.includes(p.category));
     if (activeCategory) {
       result = result.filter((p) => p.category === activeCategory);
     }
-
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (p) =>
-          p.title.toLowerCase().includes(q) ||
-          p.category.toLowerCase().includes(q) ||
-          p.description.toLowerCase().includes(q)
-      );
-    }
-
     return result;
-  }, [sortedProducts, search, activeCategory]);
+  }, [searchFiltered, topCategories, activeCategory]);
 
   if (error) {
     return (
@@ -107,7 +118,7 @@ export default function HomePage() {
       <SearchBar
         value={search}
         onChange={setSearch}
-        categories={categories}
+        categories={topCategories}
         activeCategory={activeCategory}
         onCategoryChange={setActiveCategory}
       />

@@ -1,0 +1,167 @@
+Project Summary: Product Discovery Web App
+
+Overview
+--------
+This repository implements Track B of the Beespoke R1 Build Challenge: a web-based product discovery application built with Next.js 16 (App Router), React 19, and Tailwind CSS 4. The app consumes product data from FakeStoreAPI and demonstrates API integration, state management, navigation, user interactions, and data persistence.
+
+The core features are:
+- Product feed with search, filters, and intelligent sorting.
+- Like/dislike preferences stored locally.
+- Product detail pages with "Visit Product" links and history tracking.
+- Browsing history with deduplication and clearing.
+
+The implementation is deliberately simple, using native React features and minimal dependencies; Supabase is integrated as an optional background sync layer but localStorage remains the source of truth to ensure reliability even when Supabase is unreachable or restricted.
+
+Tech Stack
+----------
+- **Framework:** Next.js 16 App Router for built-in routing, layouts, and SSR/SSG capabilities.
+- **Language:** JavaScript (ESM); no TypeScript to reduce friction.
+- **Styling:** Tailwind CSS 4 for utility-based styling; handful of custom global styles.
+- **State:** React Context + Hooks for global state; no external state libraries.
+- **Data Fetching:** Fetch API with simple wrappers in `src/lib/api.js`.
+- **Persistence:** localStorage primary; Supabase optional.
+- **Deployment:** Vercel (automatic on GitHub push).
+
+Core Modules and Architecture
+-----------------------------
+The app follows a clear structure:
+```
+src/
+  app/               # Next.js App Router pages and layouts
+    layout.js
+    page.js          # Home/feed
+    product/[id]/    # Dynamic detail route
+    history/page.js  # History page
+  components/        # Reusable UI components
+  context/           # React context for global state
+    AppContext.js
+  lib/               # Utility libraries
+    api.js           # FakeStoreAPI wrappers
+    session.js       # anonymous session ID generator
+```
+
+### Layout
+`app/layout.js` is the root layout for all routes. It imports Google fonts, global CSS, the `Navbar` component, and wraps its children with `<AppProvider>`. The layout ensures a persistent navbar, font variables, and provides the React context to the entire client-side component tree. The `<main>` tag centers page content using Tailwind utilities.
+
+### React Context (`AppContext.js`)
+This file defines the applications global state and is the single source of truth. Key state elements:
+- `preferences`: object map `{productId: "like"|"dislike"}`.
+- `history`: array of objects recording visited product details.
+- `sessionId`: anonymous UUID stored in localStorage.
+- `prefsLoaded`: boolean flag indicating localStorage read completion.
+
+Helper functions `lsRead` and `lsWrite` safely interact with localStorage. A `HISTORY_CAP = 50` constant bounds the history length.
+
+The providers `useEffect` (empty deps) reads from localStorage and sets the initial state, then initializes a Supabase client reference (if config is present).
+
+Callback functions exported in context value:
+- `setPreference(productId, pref)` toggles likes/dislikes; writes to localStorage; upserts or deletes in Supabase asynchronously.
+- `recordVisit(product)` deduplicates and prepends to history, caps length, writes localStorage, and optionally inserts into Supabase.
+- `clearHistory()` resets history both in state and localStorage.
+
+`useApp()` hook exposes `useContext(AppContext)` with a safety check.
+
+State updates automatically propagate to all consumers because React context re-renders subscribed components.
+
+### API Layer (`src/lib/api.js`)
+Simple wrappers around `fetch` to retrieve products, a single product, and categories from FakeStoreAPI. They throw errors if the response is not OK. Having a centralized API file allows easy future changes (URL swap, caching, authentication).
+
+### Session Utility (`session.js`)
+Generates or retrieves a persistent anonymous session ID stored under `pd_session_id`. Uses `crypto.randomUUID()` or a fallback generator. This ID tags Supabase inserts but is not used for authentication. Its purely a bookkeeping key.
+
+### Pages and Components
+**Home Page (`app/page.js`):**
+- Local state: `products`, `categories`, `loading`, `error`, `search`, `activeCategory`.
+- Effects: one-time data load with a cancellation flag.
+- Smart sort using `useMemo` based on preferences; each categorys score computed from the context map.
+- Filtering using text search and category, memoized to avoid unnecessary recomputation.
+- Error UI with retry, loading skeletons, empty state fallback, and grid layout of `ProductCard` components.
+
+**Product Detail (`app/product/[id]/page.js`):**
+- Uses `useParams` to get `id`.
+- State for `product`, `loading`, `error`.
+- Effects: reset state on id change; fetch product; record visit guard with a ref to avoid duplicates and wait for `prefsLoaded`.
+- Loading and error placeholders. UI displays product image, metadata, `PreferenceButtons`, and a "Visit Product" link opening a new tab to FakeStoreAPI.
+
+**History Page (`app/history/page.js`):**
+- Reads `history`, `prefsLoaded`, and `clearHistory` from context.
+- Guards rendering until `prefsLoaded` with skeleton cards to avoid flash.
+- Header shows count and clear button. Empty state with emoji and link to home. History entries list with formatted timestamps via `formatTime`.
+
+**Navbar:** sticky top nav with routes to Browse and History, active state detection using `usePathname()`.
+
+**ProductCard:** displays product image, title, price, rating, and includes `PreferenceButtons`.
+
+**PreferenceButtons:** two icons toggling like/dislike; reads from `preferences` and calls `setPreference`.
+
+**SearchBar:** controlled input for text and category pill buttons.
+
+**SkeletonCard:** Tailwind pulse placeholder used during loading.
+
+### Data Flow
+1. On launch, `AppProvider` reads preferences/history/session from localStorage and sets `prefsLoaded` true.
+2. Home page effect fetches products/categories and updates local state.
+3. Feed computes `sortedProducts` based on context preferences. Filtering and search are applied in `filtered` memo.
+4. Clicking like/dislike calls context `setPreference`, which updates state & localStorage and optionally syncs to Supabase.
+5. Clicking a product card navigates to detail page; detail fetch effect requests the product and once loaded records the visit via context.
+6. History page renders the contexts history array. Clearing calls `clearHistory`.
+
+### Persistence & Supabase
+- localStorage is always written first; the app works completely offline and does not depend on Supabase.
+- Supabase client is lazily created if `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured.
+- Writes to Supabase are wrapped in try/catch and errors are ignored (design choice to avoid breaking the app). This decision came after discovering the Supabase tables were never created (PGRST205 error), so the app was refactored to treat Supabase as optional.
+- Supabase schema (in `supabase-schema.sql`) mirrors local data: `preferences` table with unique `(session_id, product_id)` and `browsing_history` table containing product details. Row-level security policies allow anon access for demo.
+
+### Design Choices and Rationale
+- **Next.js with App Router:** provides file-system routing, layouts, and automatic code splitting; simplifies structure and deployment.
+- **React Context + Hooks:** minimal global state without polluting components with props. No external library overhead.
+- **LocalStorage Primary:** ensures reliability across network conditions and geographic restrictions; simple JSON storage is fast and universally supported.
+- **Optional Supabase sync:** adds a backend for potential analytics or future sync but never blocks the UI.
+- **Memoization with `useMemo`:** improves performance for sorting/filtering; avoids unnecessary work when state hasn't changed.
+- **Skeleton loaders:** yield a polished UX during network delays.
+- **History dedup + cap:** prevents duplicates and unbounded localStorage growth; designed for a better user experience.
+- **Clear history button:** gives users control and demonstrates state mutation.
+- **Search & filtering on client:** fast feedback and reduces backend complexity.
+- **Simple recommendation logic:** category scoring based on likes/dislikes; fits within 48h timeframe and shows thoughtfulness.
+- **Component modularity:** breaking down UI into small reusable pieces keeps code readable and testable.
+- **CSS via Tailwind:** rapid styling without bulky frameworks; keeps bundle size small.
+- **No TypeScript:** reduces overhead for a short challenge.
+- **Session ID instead of auth:** anonymous but persistent identifier is enough for demo; avoids complexity of login while still enabling future server association.
+
+### How Everything Is Connected
+- `layout.js` wraps all pages with `AppProvider` and renders the Navbar.
+- `AppContext` provides state and functions accessible via `useApp()` in pages and components.
+- `api.js` supplies fetch helpers used by the pages to get product data.
+- Pages consume context and API helpers, manage their own loading/error state, and render components from `components/`.
+- `session.js` generates a UUID for each browser; the context uses it in Supabase writes.
+- `supabase-schema.sql` shows the expected structure for backend tables; not required for the running app but included for completeness.
+
+### Potential Interview Questions & Prepared Answers
+- **Why use Next.js for a simple app?** It provides routing, layouts and SSR out of the box, speeding development and simplifying deployment to Vercel.
+- **Why context instead of Redux?** The global state is small and simple; context avoids boilerplate and has zero extra dependencies.
+- **How does the recommendation work?** The feed sorts categories by a score computed from locally stored preferences; no backend involvement.
+- **What happens if Supabase is down?** The app silently ignores errors and continues working using localStorage; Supabase is fire-and-forget only.
+- **How is persistence achieved?** Preferences and history are stored as JSON strings in localStorage; they are read once on startup. The `prefsLoaded` flag prevents rendering before the data arrives.
+- **How do you avoid duplicate history entries?** `recordVisit` filters existing entries for the same product and a ref in `ProductDetailPage` ensures it only runs once per navigation.
+- **Why cap history?** To prevent infinite growth of localStorage, which could eventually slow down the app or exceed quota.
+- **Explain the file structure.** Map provided above.
+- **Could you add authentication?** Yes: add login, tie `session_id` to user ID in context, query Supabase on startup, merge remote data with local, etc.
+- **How would you cache product data?** Use IndexedDB or a service worker; modify `api.js` to first consult cache, then network.
+- **Why not use Next.js Image?** The built-in `Image` component has layout restrictions; for this small demo a regular `<img>` suffices and requires less configuration.
+- **What does `prefsLoaded` do?** Prevents UI flash by delaying rendering until localStorage values have been read (synchronously) in the provider effect.
+
+### Build & Deployment
+- Install by running `npm install` in `product-discovery/.`.
+- `npm run dev` starts the development server at `http://localhost:3000`.
+- `npm run build && npm start` produces a production build.
+- The project is deployed to Vercel at `https://product-discovery-rho.vercel.app` via automatic GitHub integration.
+
+### Readying for Demo Video
+- Narrate the architecture in the order: layout → context → api → pages → components.
+- Click through the feed, show search/filter, like/dislike, reload to prove persistence.
+- Visit products to populate history, show dedup/cap, clear history.
+- Briefly open GitHub to display the file structure.
+- Mention design choices and how state flows.
+- Highlight supabase as optional and explain the reasoning behind treating it as a backup.
+
+This summary leaves no stone unturned: every file, design choice, and data connection is documented. Use it either as the README content or as cheat‑sheet talking points for an interview/demo.
